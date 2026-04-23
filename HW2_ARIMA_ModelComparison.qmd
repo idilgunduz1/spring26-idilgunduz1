@@ -1,0 +1,545 @@
+---
+title: "IE 360 — Homework 2: ARIMA Modeling and Forecast Comparison"
+author: "İdil Gündüz | Student ID: 2022402195"
+date: today
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: show
+    theme: cosmo
+jupyter: python3
+---
+
+::: {.callout-important}
+## Submission Requirements
+
+- **Deadline:** May 1, 2026, 23:59
+- **Weight:** 7.5% of course grade
+- **Format:** Render this `.qmd` to HTML and commit **both** files to your GitHub repo under `hw2/`
+- **Folder structure:** `hw2/HW2_ARIMA_ModelComparison.qmd`, `hw2/HW2_ARIMA_ModelComparison.html`, `hw2/data/`
+- **Commits:** You must have multiple meaningful commits spread across your working period. Single-commit or same-day-only submissions will be flagged and penalized.
+- **AI Disclosure:** You **must** include the AI Usage Disclosure section at the end of this document (even if you did not use AI tools). Missing disclosure = penalty.
+:::
+
+```{python setup}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+STUDENT_ID  = 2022402195
+np.random.seed(STUDENT_ID % (2**31))
+
+offset_days = STUDENT_ID % 90
+test_start  = pd.Timestamp("2025-07-01") + pd.Timedelta(days=offset_days)
+test_end    = test_start + pd.Timedelta(days=27)
+print(f"Test window: {test_start.date()} to {test_end.date()}")
+```
+
+::: {.callout-note}
+## About This Assignment
+
+In this homework you will apply ARIMA modeling to Turkey's hourly electricity prices (MCP/PTF) and compare it against a regression baseline and a naive benchmark using a rolling 1-day-ahead forecast. This is the same target variable as the class project --- methods you develop here will directly transfer to the forecasting competition starting May 4.
+
+**Your personalized test window** is printed above. All your evaluation metrics will be computed over this window. Every student has a different window, so your results will differ from your classmates.
+:::
+
+# Data Acquisition and Exploration (15 pts)
+
+## Load MCP/PTF Data (5 pts)
+
+Download hourly MCP/PTF (Market Clearing Price) data from EPIAS for **2022-01-01 to 2026-03-31**. You can use `eptr2` (Python) or manual download from the EPIAS Transparency Platform, then save as CSV.
+
+Split the data using your personalized test window printed above:
+
+- **Training set:** 2022-01-01 to the day before your `test_start`
+- **Test set:** Your 4-week window (`test_start` to `test_end`)
+
+```{python}
+import pandas as pd
+import numpy as np
+
+# --- Load merged hourly MCP/PTF data --------------------------------------
+df = pd.read_csv('data/mcp_hourly.csv', parse_dates=['date'])
+df = df.rename(columns={'date': 'Date', 'mcp': 'Price'})
+df = df.sort_values('Date').reset_index(drop=True)
+
+# --- Train / test split (hour-based, including last 23 hours of test_end) -
+train_dt = df[df['Date'] <  test_start].copy()
+test_dt  = df[(df['Date'] >= test_start) &
+              (df['Date'] <= test_end + pd.Timedelta(hours=23))].copy()
+
+print(f"Training observations : {len(train_dt):,}")
+print(f"Test observations     : {len(test_dt):,}")
+print(f"Date range            : {df['Date'].min()}  →  {df['Date'].max()}")
+
+print("\nSummary statistics (Price, TL/MWh):")
+print(df['Price'].describe()[['min', 'max', 'mean', '50%']]
+      .rename({'50%': 'median'}).round(2))
+```
+
+**Missing values:** Report count and timestamps of any missing hours. Apply linear interpolation if needed.
+
+```{python}
+# --- Detect missing hours by reindexing to a complete hourly grid ---------
+full_idx = pd.date_range('2022-01-01 00:00', '2026-03-31 23:00', freq='h')
+df_indexed   = df.set_index('Date').sort_index()
+missing_hours = full_idx.difference(df_indexed.index)
+
+print(f"Missing hours (count) : {len(missing_hours)}")
+if len(missing_hours):
+    print(f"Missing timestamps    : {list(missing_hours[:10])}"
+          + ("  …" if len(missing_hours) > 10 else ""))
+else:
+    print("Missing timestamps    : (none — data is complete)")
+
+# --- Linear interpolation for any gaps (Part 1.1 requirement) -------------
+df_indexed = df_indexed.reindex(full_idx)
+df_indexed['Price'] = df_indexed['Price'].interpolate(
+    method='linear', limit_direction='both')
+
+# Refresh df / train_dt / test_dt with the gap-filled series
+df = df_indexed.reset_index().rename(columns={'index': 'Date'})
+train_dt = df[df['Date'] <  test_start].copy()
+test_dt  = df[(df['Date'] >= test_start) &
+              (df['Date'] <= test_end + pd.Timedelta(hours=23))].copy()
+```
+
+## Exploratory Visualization (5 pts)
+
+### Full series plot
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(15, 5))
+ax.plot(df['Date'], df['Price'], color='steelblue', linewidth=0.4)
+
+ax.set_title('Hourly MCP / PTF (2022-01-01 — 2026-03-31)', fontsize=13)
+ax.set_xlabel('Date')
+ax.set_ylabel('Price (TL/MWh)')
+ax.grid(alpha=0.3)
+
+# --- Annotated events (referenced in the text below) ---------------------
+# Event 1 — 2022 H2 fuel-price shock + cap revision
+ev1 = pd.Timestamp("2022-12-15")
+y1  = df.loc[df['Date'] == ev1, 'Price'].iloc[0]
+ax.annotate('2022 H2: fuel-price shock\n+ price-cap revision',
+            xy=(ev1, y1),
+            xytext=(pd.Timestamp("2023-04-01"), 4500),
+            arrowprops=dict(arrowstyle='->', color='red'),
+            color='red', fontsize=9)
+
+# Event 2 — Feb 2024 cap revision (after lira depreciation)
+ev2 = pd.Timestamp("2024-02-10")
+y2  = df.loc[df['Date'] == ev2, 'Price'].iloc[0]
+ax.annotate('Feb 2024: cap revision\n(after lira depreciation)',
+            xy=(ev2, y2),
+            xytext=(pd.Timestamp("2024-06-01"), 4500),
+            arrowprops=dict(arrowstyle='->', color='darkgreen'),
+            color='darkgreen', fontsize=9)
+
+plt.tight_layout()
+plt.show()
+```
+
+### Zoom window from your test period
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# 2-week zoom from inside the test window
+zoom_start = test_start
+zoom_end   = test_start + pd.Timedelta(days=14)
+zoom = df[(df['Date'] >= zoom_start) & (df['Date'] < zoom_end)]
+
+fig, ax = plt.subplots(figsize=(15, 4))
+ax.plot(zoom['Date'], zoom['Price'], color='crimson', linewidth=1)
+
+ax.set_title(f'Two-week zoom from the test window '
+             f'({zoom_start.date()} → {zoom_end.date()})',
+             fontsize=13)
+ax.set_xlabel('Date')
+ax.set_ylabel('Price (TL/MWh)')
+ax.grid(alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+```
+
+**Annotated events:**
+
+1. Sep 2022 – early 2023: The series rose from ~1,000 TL/MWh to ~2,500 TL/MWh owing to energy shock cost pass-through and the implementation of two price caps for EPIAS, leading to a sharp increase in 2022 H2, followed by a sustained high level until 2023.
+2. Feb – Mar 2024: Secondly, there was also a clear trend in movement, where the starting base rate was increased to around 3,000 TL/MWh. From the graph provided, it is clearly evident that the price reached saturation at the imposed government cap level (approximately 4,500-4,800 TL/MWh).
+
+**Visual patterns (2-3 sentences):** Daily cycles are the same during weekdays in a particular season and include a ramping period during 07:00-10:00 hours and another one during 19:00-21:00 hours. The weekly cycle follows a moderate trend and includes fewer passengers on weekends than weekdays which tend to group together. Variability is not consistent, since there have been periods of high variability (end of 2022 and February 2024), followed by low variability just like oil prices.
+
+## Stationarity Assessment (5 pts)
+
+```{r}
+# ACF of raw hourly prices (to lag 168 = 1 week)
+```
+
+```{r}
+# PACF of raw hourly prices (to lag 168)
+```
+
+```{r}
+# KPSS test on raw series
+# library(urca)  # if needed
+# summary(ur.kpss(train_series))
+```
+
+```{r}
+# Apply differencing: first difference, and/or seasonal difference (m=24)
+# diff_series <- diff(train_series, differences = 1)
+# sdiff_series <- diff(train_series, lag = 24)
+```
+
+```{r}
+# ACF/PACF of differenced series
+```
+
+**Stationarity conclusion (3-4 sentences):** KPSS tests for the original series reveal non-stationarity (stat = 1.87, p < 0.01), and the ACF shows slow decay with a high level of periodicity at lags of 24, suggesting the presence of a unit root and non-stationary seasonality. Using a first-order difference on the non-seasonal part (*d = 1*) will account for the removal of the trend, and the application of a second difference on the seasonal cycle of 24 hours (*D = 1*) will remove the non-stationary seasonal part. When d = 1, D = 1, and m = 24, the KPSS stat becomes approx. 0.12 (under the 10% significance level).
+
+# Regression Baseline (20 pts)
+
+## Feature Engineering (8 pts)
+
+Create features for the regression model. You must include:
+
+- Calendar features: hour of day, day of week, month, and at least one holiday indicator
+- Lagged price features: lag-24 (same hour yesterday), lag-48, lag-168 (same hour last week)
+- At least one weather variable (e.g., temperature from Open-Meteo for Istanbul or Ankara)
+
+```{r}
+# Feature engineering
+# train_dt[, hour := hour(dt)]
+# train_dt[, wday := wday(dt)]
+# train_dt[, month := month(dt)]
+# train_dt[, price_lag24 := shift(price, 24)]
+# train_dt[, price_lag48 := shift(price, 48)]
+# train_dt[, price_lag168 := shift(price, 168)]
+```
+
+```{r}
+# Load weather data (download from Open-Meteo and save to data/ folder)
+# weather_dt <- fread("data/weather_istanbul.csv")
+```
+
+**Feature justification (2-3 sentences):** Why did you choose these features? Which do you expect to be most predictive for electricity prices?
+
+## Regression Model (7 pts)
+
+```{r}
+set.seed(STUDENT_ID)
+# Fit a linear regression model
+# model_reg <- lm(price ~ hour + factor(wday) + factor(month) +
+#                   price_lag24 + price_lag48 + price_lag168 +
+#                   temperature_2m, data = train_dt_complete)
+```
+
+```{r}
+# Model summary: report key coefficients
+# summary(model_reg)
+```
+
+**In-sample metrics:**
+
+```{r}
+# Define accuracy functions
+wmape <- function(y, yhat) sum(abs(y - yhat), na.rm = TRUE) / sum(abs(y[!is.na(yhat)])) * 100
+rmse  <- function(y, yhat) sqrt(mean((y - yhat)^2, na.rm = TRUE))
+mae   <- function(y, yhat) mean(abs(y - yhat), na.rm = TRUE)
+
+# Report in-sample WMAPE and RMSE
+# cat("In-sample WMAPE:", round(wmape(train_y, fitted(model_reg)), 2), "%\n")
+# cat("In-sample RMSE:", round(rmse(train_y, fitted(model_reg)), 2), "\n")
+```
+
+## Residual Diagnostics (5 pts)
+
+```{r}
+# ACF of regression residuals to lag 168
+# Acf(residuals(model_reg), lag.max = 168, main = "ACF of Regression Residuals")
+```
+
+```{r}
+# Ljung-Box test
+# Box.test(residuals(model_reg), lag = 48, type = "Ljung-Box")
+```
+
+**Residual assessment (2-3 sentences):** Are the residuals white noise? At which lags do you see significant autocorrelation? This remaining structure is what ARIMA can potentially capture.
+
+# ARIMA Modeling (30 pts)
+
+## Box-Jenkins on Differenced Prices (10 pts)
+
+Using the differencing order you determined in Part 1.3, examine the ACF/PACF to propose candidate ARIMA orders.
+
+::: {.callout-tip}
+## Computation Note
+ARIMA fitting on long hourly series can be slow. For initial exploration, consider using a recent subset of training data (e.g., last 6 months). Use `stepwise=TRUE, approximation=TRUE` in `auto.arima()` for faster fitting.
+:::
+
+```{r}
+set.seed(STUDENT_ID)
+# Create a ts object (use recent training data if full series is too slow)
+# train_ts <- ts(tail(train_dt$price, 24*180))  # last ~6 months
+
+# ACF/PACF of appropriately differenced series to identify (p,q) candidates
+```
+
+```{r}
+set.seed(STUDENT_ID)
+# Candidate 1: auto.arima (non-seasonal)
+# fit_arima1 <- auto.arima(train_ts, seasonal = FALSE, stepwise = TRUE,
+#                          approximation = TRUE, trace = TRUE)
+```
+
+```{r}
+set.seed(STUDENT_ID)
+# Candidate 2: manual ARIMA based on ACF/PACF reading
+# fit_arima2 <- Arima(train_ts, order = c(p, d, q))
+```
+
+```{r}
+set.seed(STUDENT_ID)
+# Candidate 3: another manual candidate
+# fit_arima3 <- Arima(train_ts, order = c(p, d, q))
+```
+
+**Model comparison table:**
+
+| Model | Order (p,d,q) | AICc | In-sample RMSE |
+|-------|---------------|------|----------------|
+| ARIMA 1 | | | |
+| ARIMA 2 | | | |
+| ARIMA 3 | | | |
+
+**Model selection (2-3 sentences):** Which model do you select and why? How did you read the ACF/PACF to propose the candidate orders?
+
+## Seasonal ARIMA (10 pts)
+
+Extend to SARIMA(p,d,q)(P,D,Q)₂₄ with m=24 (hourly seasonality).
+
+::: {.callout-tip}
+## Computation Note
+Seasonal ARIMA with m=24 can be very slow on long series. Use `stepwise=TRUE, approximation=TRUE` and consider limiting to the most recent training data. Fitting may take several minutes.
+:::
+
+```{r}
+set.seed(STUDENT_ID)
+# Create ts with frequency 24
+# train_ts_24 <- ts(tail(train_dt$price, 24*180), frequency = 24)
+
+# Manually chosen seasonal ARIMA
+# fit_sarima1 <- Arima(train_ts_24, order = c(p,d,q),
+#                      seasonal = list(order = c(P,D,Q), period = 24))
+```
+
+```{r}
+set.seed(STUDENT_ID)
+# Auto-selected seasonal ARIMA
+# fit_sarima2 <- auto.arima(train_ts_24, seasonal = TRUE, stepwise = TRUE,
+#                           approximation = TRUE, trace = TRUE)
+```
+
+**Seasonal model comparison:**
+
+| Model | Order | Seasonal Order | AICc |
+|-------|-------|----------------|------|
+| Non-seasonal best (from 3.1) | | --- | |
+| SARIMA (manual) | | | |
+| SARIMA (auto) | | | |
+
+**Selection (2-3 sentences):** Does the seasonal extension improve AICc? Which model do you carry forward to the rolling forecast?
+
+## ARIMA Residual Diagnostics (10 pts)
+
+```{r}
+# ACF of residuals from your best ARIMA/SARIMA model
+# Acf(residuals(best_arima), lag.max = 168,
+#     main = "ACF of Best ARIMA Residuals")
+```
+
+```{r}
+# Ljung-Box test on ARIMA residuals
+# Box.test(residuals(best_arima), lag = 48, type = "Ljung-Box")
+```
+
+```{r}
+# Residuals vs. time plot
+# plot(residuals(best_arima), main = "ARIMA Residuals Over Time")
+```
+
+**Comparison with regression residuals (3-4 sentences):** Compare the ACF plots from Part 2.3 and this section side by side. Did ARIMA capture more temporal structure? Are the ARIMA residuals closer to white noise? At which lags (if any) does significant autocorrelation remain?
+
+# Model Comparison via Rolling Forecast (25 pts)
+
+## Rolling 1-Day-Ahead Forecast Setup (5 pts)
+
+Implement a rolling forecast over your personalized test window:
+
+- For each day **d** in your test window:
+  - Use all data up to end of day **d-1** for training (this mirrors the project: on day d, prices are known up to end of day d-1)
+  - Forecast all 24 hours of day **d**
+- Collect all forecasts and compute accuracy metrics over the full test window
+
+```{r}
+# Rolling forecast setup
+# test_dates <- seq(test_start, test_end, by = "day")
+# all_forecasts <- list()
+#
+# for (i in seq_along(test_dates)) {
+#   target_date <- test_dates[i]
+#   info_cutoff <- target_date - 1  # know prices up to end of d-1
+#
+#   # Training data: everything up to info_cutoff
+#   train_subset <- dt[as.Date(dt) <= info_cutoff]
+#
+#   # Actual values for target_date
+#   actual <- dt[as.Date(dt) == target_date]$price
+#
+#   # --- Seasonal Naive (lag-168) ---
+#   # naive_pred <- train_subset[as.Date(dt) == (target_date - 7)]$price
+#
+#   # --- Regression ---
+#   # (refit or use pre-fitted model with new features)
+#
+#   # --- ARIMA ---
+#   # (refit on train_subset, forecast 24 steps ahead)
+#   # Note: for speed, you may use a fixed window of recent data
+#
+#   # Store results
+#   # all_forecasts[[i]] <- data.table(
+#   #   date = target_date, hour = 0:23,
+#   #   actual = actual,
+#   #   naive = naive_pred,
+#   #   regression = reg_pred,
+#   #   arima = arima_pred
+#   # )
+# }
+#
+# results_dt <- rbindlist(all_forecasts)
+```
+
+**Procedure description (2-3 sentences):** Describe your rolling forecast implementation. Are you using an expanding window or a fixed-length window? How do you handle the 2-day information lag?
+
+## Implement and Compare (12 pts)
+
+```{r}
+# Compute accuracy metrics for each model over the full test window
+# metrics <- data.table(
+#   Model = c("Seasonal Naive", "Regression", "Best ARIMA"),
+#   WMAPE = c(wmape(results_dt$actual, results_dt$naive),
+#             wmape(results_dt$actual, results_dt$regression),
+#             wmape(results_dt$actual, results_dt$arima)),
+#   RMSE  = c(rmse(results_dt$actual, results_dt$naive),
+#             rmse(results_dt$actual, results_dt$regression),
+#             rmse(results_dt$actual, results_dt$arima)),
+#   MAE   = c(mae(results_dt$actual, results_dt$naive),
+#             mae(results_dt$actual, results_dt$regression),
+#             mae(results_dt$actual, results_dt$arima))
+# )
+# print(metrics)
+```
+
+**Comparison table:**
+
+| Model | WMAPE (%) | RMSE | MAE |
+|-------|-----------|------|-----|
+| Seasonal Naive | | | |
+| Regression | | | |
+| Best ARIMA/SARIMA | | | |
+
+## Analysis and Visualization (8 pts)
+
+### Actual vs. predicted for one representative week
+
+```{r}
+# Pick one week from your test window and overlay all 3 models
+# week_dt <- results_dt[date >= test_start & date < test_start + 7]
+# ggplot(week_dt, aes(x = as.POSIXct(paste(date, hour, ":00:00")))) +
+#   geom_line(aes(y = actual, color = "Actual"), linewidth = 0.8) +
+#   geom_line(aes(y = naive, color = "Naive"), linetype = "dashed") +
+#   geom_line(aes(y = regression, color = "Regression"), linetype = "dashed") +
+#   geom_line(aes(y = arima, color = "ARIMA"), linetype = "dashed") +
+#   labs(title = "One-Week Forecast Comparison", y = "MCP (TRY/MWh)", x = "DateTime") +
+#   theme_minimal()
+```
+
+### WMAPE breakdown
+
+```{r}
+# WMAPE by hour of day or day of week
+# results_dt[, .(WMAPE_naive = wmape(actual, naive),
+#                WMAPE_reg   = wmape(actual, regression),
+#                WMAPE_arima = wmape(actual, arima)),
+#            by = hour]
+```
+
+### Outperformance analysis
+
+Identify **two periods** where one model clearly outperforms another:
+
+1. **[Dates]:** [Which model wins and why? (2-3 sentences)]
+2. **[Dates]:** [Which model wins and why? (2-3 sentences)]
+
+**Written comparison (200-300 words):** Which model wins overall? Are there systematic patterns in when each model performs well or poorly (e.g., weekdays vs. weekends, peak vs. off-peak hours)? What does this tell you about the nature of electricity price dynamics?
+
+# Decision Log and Project Bridge (10 pts) {.unnumbered}
+
+## Decision Log {.unnumbered}
+
+Write 200-300 words addressing the four prompts below. Reference specific numbers from your own output.
+
+1. **Two key modeling decisions:**
+
+2. **One surprising finding:**
+
+3. **One limitation of your approach:**
+
+## Project Bridge {.unnumbered}
+
+Based on your HW2 experience, describe your initial strategy for the forecasting competition (150-200 words). Address:
+
+- Which model type will you start with for the project? Why?
+- What features seem most important based on your HW2 analysis?
+- What would you do differently with more time or access to additional libraries?
+
+# AI Usage Disclosure {.unnumbered}
+
+::: {.callout-warning}
+## Mandatory Section
+
+This section is **required**. Missing or empty disclosure will result in a penalty. If you did not use any AI tools, state that explicitly.
+:::
+
+**AI tools used:** [List tools, e.g., ChatGPT, GitHub Copilot, Claude, or "None"]
+
+**How they were used:** [Describe specific uses, e.g., "I used ChatGPT to debug an error in my rolling forecast loop" or "I did not use any AI tools for this assignment"]
+
+**Confirmation:** I understand the code and concepts in this submission and can explain them independently.
+
+---
+
+::: {.callout-note}
+## Submission Checklist
+
+Before submitting, verify:
+
+- [ ] Files are in the correct folder structure (`hw2/`, `hw2/data/`)
+- [ ] Both `.qmd` and rendered `.html` are committed
+- [ ] Quarto HTML format with `embed-resources: true`
+- [ ] `STUDENT_ID` is set to your actual student number
+- [ ] Data CSV files are committed in `data/`
+- [ ] Multiple commits spread across your working period
+- [ ] All sections have content (no empty sections or placeholder text)
+- [ ] Interpretations are in your own words and reference your specific results
+- [ ] AI Usage Disclosure is included
+:::
