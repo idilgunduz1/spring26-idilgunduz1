@@ -468,25 +468,53 @@ Using the differencing order you determined in Part 1.3, examine the ACF/PACF to
 ARIMA fitting on long hourly series can be slow. For initial exploration, consider using a recent subset of training data (e.g., last 6 months). Use `stepwise=TRUE, approximation=TRUE` in `auto.arima()` for faster fitting.
 :::
 
-```{r}
-set.seed(STUDENT_ID)
-# Create a ts object (use recent training data if full series is too slow)
-# train_ts <- ts(tail(train_dt$price, 24*180))  # last ~6 months
+```{python}
+#| label: arima-identification
+#| fig-cap: "ACF and PACF for ARIMA parameter identification"
 
-# ACF/PACF of appropriately differenced series to identify (p,q) candidates
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+import matplotlib.pyplot as plt
+
+diff_series = train_dt['Price'].diff(1).diff(24).dropna()
+
+fig, ax = plt.subplots(2, 1, figsize=(12, 10))
+
+plot_acf(diff_series, lags=168, ax=ax[0])
+ax[0].set_title("ACF of Differenced Series (Identification for q, Q)")
+
+plot_pacf(diff_series, lags=168, ax=ax[1], method='ywm')
+ax[1].set_title("PACF of Differenced Series (Identification for p, P)")
+
+plt.tight_layout()
+plt.show()
 ```
 
-```{r}
-set.seed(STUDENT_ID)
-# Candidate 1: auto.arima (non-seasonal)
-# fit_arima1 <- auto.arima(train_ts, seasonal = FALSE, stepwise = TRUE,
-#                          approximation = TRUE, trace = TRUE)
+```{python}
+#| label: candidate-1-arima
+#| echo: true
+
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+# Candidate 1: Simple ARIMA (Non-seasonal)
+# We set seasonal_order=(0,0,0,0) to disable seasonality for this candidate.
+# Order (1,1,1) is a common starting point for an ARIMA baseline.
+
+model_candidate1 = SARIMAX(train_dt['Price'], 
+                           order=(1, 1, 1), 
+                           seasonal_order=(0, 0, 0, 0))
+
+results_candidate1 = model_candidate1.fit(disp=False)
+
+# Print summary to evaluate Candidate 1
+print(results_candidate1.summary())
 ```
 
+```{python}
 ```{r}
 set.seed(STUDENT_ID)
-# Candidate 2: manual ARIMA based on ACF/PACF reading
-# fit_arima2 <- Arima(train_ts, order = c(p, d, q))
+# Candidate 3: another manual candidate
+# fit_arima3 <- Arima(train_ts, order = c(p, d, q))
+```
 ```
 
 ```{r}
