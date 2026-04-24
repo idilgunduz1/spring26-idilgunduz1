@@ -510,28 +510,71 @@ print(results_candidate1.summary())
 ```
 
 ```{python}
-```{r}
-set.seed(STUDENT_ID)
-# Candidate 3: another manual candidate
-# fit_arima3 <- Arima(train_ts, order = c(p, d, q))
-```
+#| label: candidate-2-manual
+#| echo: true
+
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+# Candidate 2: Manual SARIMA model.
+model_candidate2 = SARIMAX(train_dt['Price'], 
+                           order=(1, 1, 1), 
+                           seasonal_order=(1, 1, 1, 24),
+                           enforce_stationarity=False,
+                           enforce_invertibility=False)
+
+results_candidate2 = model_candidate2.fit(disp=False, maxiter=100)
+
+# Sonuçları yazdır
+print(results_candidate2.summary())
 ```
 
-```{r}
-set.seed(STUDENT_ID)
-# Candidate 3: another manual candidate
-# fit_arima3 <- Arima(train_ts, order = c(p, d, q))
+```{python}
+#| label: candidate-3-manual-sarima
+#| echo: true
+
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+model_candidate3 = SARIMAX(train_dt['Price'], 
+                           order=(0, 1, 1), 
+                           seasonal_order=(0, 1, 1, 24),
+                           enforce_stationarity=False,
+                           enforce_invertibility=False)
+
+results_candidate3 = model_candidate3.fit(disp=False, maxiter=100)
+
+# Print summary
+print(results_candidate3.summary())
+
+```
+```{python}
+#| label: calculate-rmse
+#| echo: true
+
+import numpy as np
+
+# Dictionary of your fitted models
+models = {
+    "ARIMA 1": results_candidate1,
+    "ARIMA 2": results_candidate2,
+    "ARIMA 3": results_candidate3
+}
+
+for name, model_res in models.items():
+    # Residuals are the differences between actual and fitted values
+    residuals = model_res.resid
+    # RMSE = sqrt(mean(residuals^2))
+    rmse = np.sqrt(np.mean(residuals**2))
+    print(f"{name} RMSE: {rmse:.4f}")
+
 ```
 
 **Model comparison table:**
+Model,    "Order (p,d,q)",           AIC,        In-sample RMSE
+ARIMA 1,  "(1, 1, 1)",               "463,994",  392.15
+ARIMA 2,  "(1, 1, 1)(1, 1, 1, 24)",  "452,026",  314.84
+ARIMA 3,  "(0, 1, 1)(0, 1, 1, 24)",  "452,026",  327.52
 
-| Model | Order (p,d,q) | AICc | In-sample RMSE |
-|-------|---------------|------|----------------|
-| ARIMA 1 | | | |
-| ARIMA 2 | | | |
-| ARIMA 3 | | | |
-
-**Model selection (2-3 sentences):** Which model do you select and why? How did you read the ACF/PACF to propose the candidate orders?
+**Model selection (2-3 sentences):** The ACF and PACF plots helped us determine that the appropriate time series structure was SARIMA(1,1,1)(1,1,1,24). As the prices were not stationary, it required us to difference them once, that is $d=1$. Since there were significant spikes at lag 1 in the ACF and PACF plots, it indicated the presence of AR(1) and MA(1). Finally, due to the spikes at lags 24, 48, and 72, we could say that there was a strong daily seasonality, which necessitated the inclusion of seasonal parameters as (1,1,1,24).
 
 ## Seasonal ARIMA (10 pts)
 
@@ -542,21 +585,41 @@ Extend to SARIMA(p,d,q)(P,D,Q)₂₄ with m=24 (hourly seasonality).
 Seasonal ARIMA with m=24 can be very slow on long series. Use `stepwise=TRUE, approximation=TRUE` and consider limiting to the most recent training data. Fitting may take several minutes.
 :::
 
-```{r}
-set.seed(STUDENT_ID)
-# Create ts with frequency 24
-# train_ts_24 <- ts(tail(train_dt$price, 24*180), frequency = 24)
+```{python}
+#| label: seasonal-arima-fit
+#| echo: true
 
-# Manually chosen seasonal ARIMA
-# fit_sarima1 <- Arima(train_ts_24, order = c(p,d,q),
-#                      seasonal = list(order = c(P,D,Q), period = 24))
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+train_subset = train_dt['Price'].tail(24 * 180)
+
+model_sarima = SARIMAX(train_subset, 
+                       order=(1, 1, 1), 
+                       seasonal_order=(1, 1, 1, 24),
+                       enforce_stationarity=False,
+                       enforce_invertibility=False)
+
+# 'disp=False' keeps the output clean
+results_sarima = model_sarima.fit(disp=False, maxiter=50)
+
+# 3. Output results
+print(results_sarima.summary())
 ```
 
-```{r}
-set.seed(STUDENT_ID)
-# Auto-selected seasonal ARIMA
-# fit_sarima2 <- auto.arima(train_ts_24, seasonal = TRUE, stepwise = TRUE,
-#                           approximation = TRUE, trace = TRUE)
+```{python}
+
+import pmdarima as pm
+
+train_subset = train_dt['Price'].tail(24 * 180)
+
+sarima_model = pm.auto_arima(train_subset,
+                             seasonal=True,
+                             m=24,
+                             stepwise=True,
+                             approximation=True,
+                             trace=True)
+
+print(sarima_model.summary())
 ```
 
 **Seasonal model comparison:**
@@ -730,9 +793,9 @@ Based on your HW2 experience, describe your initial strategy for the forecasting
 This section is **required**. Missing or empty disclosure will result in a penalty. If you did not use any AI tools, state that explicitly.
 :::
 
-**AI tools used:** [List tools, e.g., ChatGPT, GitHub Copilot, Claude, or "None"]
+**AI tools used:** ChatGPT, GitHub Copilot, Claude
 
-**How they were used:** [Describe specific uses, e.g., "I used ChatGPT to debug an error in my rolling forecast loop" or "I did not use any AI tools for this assignment"]
+**How they were used:** I used AI to troubleshoot and optimize. I also used the model to establish performance metrics for simulation modeling in Simio and to fix syntax and rendering issues in Quarto (.qmd) reports.
 
 **Confirmation:** I understand the code and concepts in this submission and can explain them independently.
 
