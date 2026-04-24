@@ -329,24 +329,19 @@ Create features for the regression model. You must include:
 #| label: feature-engineering
 #| echo: true
 
-# 1. Calendar Features (Takvim Özellikleri)
-# 'Date' sütununun datetime formatında olduğundan emin ol
+# 1. Calendar Features 
 df['hour']  = df['Date'].dt.hour
 df['wday']  = df['Date'].dt.weekday
 df['month'] = df['Date'].dt.month
 
-# 2. Lag Features (Gecikmeli Değişkenler - Otoregresif yapı)
-# Geçmiş fiyatları modele tanıtarak "piyasa hafızasını" oluşturuyoruz
+# 2. Lag Features 
 df['price_lag24']   = df['Price'].shift(24)
 df['price_lag48']   = df['Price'].shift(48)
 df['price_lag168']  = df['Price'].shift(168)
 
-# 3. İsteğe bağlı: Holiday Indicator (Ödevde istenebilir)
-# Türkiye resmi tatil listesi (İlgili yıla göre güncelleyebilirsin)
 holidays = ['2025-01-01', '2025-04-23', '2025-05-01', '2025-05-19', '2025-07-15', '2025-08-30', '2025-10-29']
 df['is_holiday'] = df['Date'].dt.strftime('%Y-%m-%d').isin(holidays).astype(int)
 
-# 4. Temizlik: Lag işlemlerinden dolayı oluşan NaN değerleri at
 df = df.dropna()
 
 # Kontrol
@@ -359,20 +354,12 @@ print(df.head())
 
 import pandas as pd
 
-# 1. Load the weather data
-# Ensure the 'date' column is parsed as datetime to match your main dataframe
 weather_df = pd.read_csv('data/weather_istanbul.csv', parse_dates=['date'])
 
-# 2. Rename the date column to match your main dataframe (e.g., 'Date')
-# If your main df uses 'Date', use this:
 weather_df = weather_df.rename(columns={'date': 'Date'})
 
-# 3. Merge with your existing main dataframe (df)
-# 'how=left' ensures you keep all hours from your main price data
 df = pd.merge(df, weather_df, on='Date', how='left')
 
-# 4. Handle missing values
-# If weather data has gaps, interpolation is best for time series
 df = df.interpolate(method='linear')
 
 print("Weather data loaded and merged successfully.")
