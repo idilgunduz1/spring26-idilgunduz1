@@ -360,6 +360,9 @@ weather_df = weather_df.rename(columns={'date': 'Date'})
 
 df = pd.merge(df, weather_df, on='Date', how='left')
 
+# Rename temperature column for easier use in formula
+df = df.rename(columns={'temperature_2m': 'temp_istanbul'})
+
 df = df.interpolate(method='linear')
 
 print("Weather data loaded and merged successfully.")
@@ -370,30 +373,61 @@ print(df.head())
 
 ## Regression Model (7 pts)
 
-```{r}
-set.seed(STUDENT_ID)
-# Fit a linear regression model
-# model_reg <- lm(price ~ hour + factor(wday) + factor(month) +
-#                   price_lag24 + price_lag48 + price_lag168 +
-#                   temperature_2m, data = train_dt_complete)
+```{python}
+#| label: regression-baseline
+#| echo: true
+
+import statsmodels.formula.api as smf
+
+df['hour']  = df['Date'].dt.hour
+df['wday']  = df['Date'].dt.weekday
+df['month'] = df['Date'].dt.month
+
+df['price_lag24']  = df['Price'].shift(24)
+df['price_lag48']  = df['Price'].shift(48)
+df['price_lag168'] = df['Price'].shift(168)
+
+holidays = ['2025-01-01', '2025-04-23', '2025-05-01', '2025-05-19', '2025-07-15', '2025-08-30', '2025-10-29']
+df['is_holiday'] = df['Date'].dt.strftime('%Y-%m-%d').isin(holidays).astype(int)
+
+train_dt = df[df['Date'] < test_start].copy()
+train_dt = train_dt.dropna()
+
+formula = "Price ~ hour + C(wday) + C(month) + is_holiday + price_lag24 + price_lag48 + price_lag168 + temp_istanbul"
+model_reg = smf.ols(formula, data=train_dt).fit()
+
 ```
 
-```{r}
-# Model summary: report key coefficients
-# summary(model_reg)
+```{python}
+print(model_reg.summary())
 ```
 
 **In-sample metrics:**
 
-```{r}
-# Define accuracy functions
-wmape <- function(y, yhat) sum(abs(y - yhat), na.rm = TRUE) / sum(abs(y[!is.na(yhat)])) * 100
-rmse  <- function(y, yhat) sqrt(mean((y - yhat)^2, na.rm = TRUE))
-mae   <- function(y, yhat) mean(abs(y - yhat), na.rm = TRUE)
+```{python}
+#| label: accuracy-metrics
+#| echo: true
 
-# Report in-sample WMAPE and RMSE
-# cat("In-sample WMAPE:", round(wmape(train_y, fitted(model_reg)), 2), "%\n")
-# cat("In-sample RMSE:", round(rmse(train_y, fitted(model_reg)), 2), "\n")
+import numpy as np
+
+def wmape(y, yhat):
+    # WMAPE: Weighted Mean Absolute Percentage Error
+    return np.sum(np.abs(y - yhat)) / np.sum(np.abs(y)) * 100
+
+def rmse(y, yhat):
+    # RMSE: Root Mean Squared Error
+    return np.sqrt(np.mean((y - yhat)**2))
+
+def mae(y, yhat):
+    # MAE: Mean Absolute Error
+    return np.mean(np.abs(y - yhat))
+
+y_true = train_dt['Price']
+y_pred = model_reg.fittedvalues 
+
+print(f"In-sample WMAPE: {wmape(y_true, y_pred):.2f}%")
+print(f"In-sample RMSE:  {rmse(y_true, y_pred):.2f}")
+print(f"In-sample MAE:   {mae(y_true, y_pred):.2f}")
 ```
 
 ## Residual Diagnostics (5 pts)
@@ -403,24 +437,25 @@ mae   <- function(y, yhat) mean(abs(y - yhat), na.rm = TRUE)
 #| fig-cap: "ACF of Regression Residuals"
 
 from statsmodels.graphics.tsaplots import plot_acf
+from statsmodels.stats.diagnostic import acorr_ljungbox
 import matplotlib.pyplot as plt
 
-# Replace 'model_fit' with the name of your actual fitted model object
-# e.g., model_fit = results.fit()
-residuals = model_fit.resid
+# model_reg senin model ismin, ona göre çektik
+residuals = model_reg.resid
 
+# 1. ACF Grafiği
 fig, ax = plt.subplots(figsize=(10, 4))
 plot_acf(residuals, lags=168, ax=ax)
 ax.set_title("ACF of Regression Residuals")
 plt.show()
 ```
 
-```{r}
-# Ljung-Box test
-# Box.test(residuals(model_reg), lag = 48, type = "Ljung-Box")
+```{python}
+lb_test = acorr_ljungbox(residuals, lags=[24, 48, 168])
+print(lb_test)
 ```
 
-**Residual assessment (2-3 sentences):** Are the residuals white noise? At which lags do you see significant autocorrelation? This remaining structure is what ARIMA can potentially capture.
+**Residual assessment (2-3 sentences):** According to Ljung-Box test results, residuals from the regression are not white noise for lags 24, 48, and 168 (p<0.05). In particular, p-value for lag 168 (p=0.000) proves the absence of fit to the weekly periodicity, indicating that there is no account of 7-day periodicity in the electricity price in the baseline regression model. Furthermore, p-value for lag 24 (p=0.048) proves that although the model takes into account daily periodicity to some degree, it is still insufficient.
 
 # ARIMA Modeling (30 pts)
 
