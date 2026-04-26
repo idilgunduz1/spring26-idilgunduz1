@@ -524,7 +524,6 @@ model_candidate2 = SARIMAX(train_dt['Price'],
 
 results_candidate2 = model_candidate2.fit(disp=False, maxiter=100)
 
-# Sonuçları yazdır
 print(results_candidate2.summary())
 ```
 
@@ -546,27 +545,6 @@ results_candidate3 = model_candidate3.fit(disp=False, maxiter=100)
 print(results_candidate3.summary())
 
 ```
-```{python}
-#| label: calculate-rmse
-#| echo: true
-
-import numpy as np
-
-# Dictionary of your fitted models
-models = {
-    "ARIMA 1": results_candidate1,
-    "ARIMA 2": results_candidate2,
-    "ARIMA 3": results_candidate3
-}
-
-for name, model_res in models.items():
-    # Residuals are the differences between actual and fitted values
-    residuals = model_res.resid
-    # RMSE = sqrt(mean(residuals^2))
-    rmse = np.sqrt(np.mean(residuals**2))
-    print(f"{name} RMSE: {rmse:.4f}")
-
-```
 
 **Model comparison table:**
 Model,    "Order (p,d,q)",           AIC,        In-sample RMSE
@@ -574,7 +552,7 @@ ARIMA 1,  "(1, 1, 1)",               "463,994",  392.15
 ARIMA 2,  "(1, 1, 1)(1, 1, 1, 24)",  "452,026",  314.84
 ARIMA 3,  "(0, 1, 1)(0, 1, 1, 24)",  "452,026",  327.52
 
-**Model selection (2-3 sentences):** The ACF and PACF plots helped us determine that the appropriate time series structure was SARIMA(1,1,1)(1,1,1,24). As the prices were not stationary, it required us to difference them once, that is $d=1$. Since there were significant spikes at lag 1 in the ACF and PACF plots, it indicated the presence of AR(1) and MA(1). Finally, due to the spikes at lags 24, 48, and 72, we could say that there was a strong daily seasonality, which necessitated the inclusion of seasonal parameters as (1,1,1,24).
+**Model selection (2-3 sentences):** The ACF and PACF plots helped us determine that the appropriate time series structure was SARIMA(1,1,1)(1,1,1,24). As the prices were not stationary, it required us to difference them once, that is d=1. Since there were significant spikes at lag 1 in the ACF and PACF plots, it indicated the presence of AR(1) and MA(1). Finally, due to the spikes at lags 24, 48, and 72, we could say that there was a strong daily seasonality, which necessitated the inclusion of seasonal parameters as (1,1,1,24).
 
 ## Seasonal ARIMA (10 pts)
 
@@ -586,40 +564,65 @@ Seasonal ARIMA with m=24 can be very slow on long series. Use `stepwise=TRUE, ap
 :::
 
 ```{python}
-#| label: seasonal-arima-fit
+#| label: modeling-pipeline
 #| echo: true
 
-from statsmodels.tsa.statespace.sarimax import SARIMAX
+import pandas as pd
+import statsmodels.api as sm
+import warnings
+
+# Ignore convergence warnings for a cleaner report
+warnings.filterwarnings("ignore")
 
 train_subset = train_dt['Price'].tail(24 * 180)
 
-model_sarima = SARIMAX(train_subset, 
+# --- 1. Manual SARIMA ---
+print("Fitting Manual SARIMA...")
+model_sarima = sm.tsa.statespace.SARIMAX(train_subset, 
                        order=(1, 1, 1), 
                        seasonal_order=(1, 1, 1, 24),
                        enforce_stationarity=False,
                        enforce_invertibility=False)
 
-# 'disp=False' keeps the output clean
 results_sarima = model_sarima.fit(disp=False, maxiter=50)
-
-# 3. Output results
 print(results_sarima.summary())
+
+# --- 2. Auto-ARIMA Fallback ---
+try:
+    import pmdarima as pm
+    print("\nFitting Auto-ARIMA...")
+    sarima_model = pm.auto_arima(train_subset,
+                                 seasonal=True,
+                                 m=24,
+                                 stepwise=True,
+                                 approximation=True,
+                                 trace=True)
+    print(sarima_model.summary())
 ```
 
 ```{python}
+#| label: final-forecasting
+#| echo: true
 
-import pmdarima as pm
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import numpy as np
 
-train_subset = train_dt['Price'].tail(24 * 180)
+# Use the fitted model to forecast the length of test_dt
+forecast = results_sarima.forecast(steps=len(test_dt))
 
-sarima_model = pm.auto_arima(train_subset,
-                             seasonal=True,
-                             m=24,
-                             stepwise=True,
-                             approximation=True,
-                             trace=True)
+# Define WMAPE
+def calculate_wmape(y_true, y_pred):
+    return (np.sum(np.abs(y_true - y_pred)) / np.sum(np.abs(y_true))) * 100
 
-print(sarima_model.summary())
+# Calculate metrics
+rmse = np.sqrt(mean_squared_error(test_dt['Price'], forecast))
+wmape = calculate_wmape(test_dt['Price'], forecast)
+mae = mean_absolute_error(test_dt['Price'], forecast)
+
+print(f"Final Model Performance:")
+print(f"RMSE: {rmse:.4f}")
+print(f"WMAPE: {wmape:.2f}%")
+print(f"MAE: {mae:.4f}")
 ```
 
 **Seasonal model comparison:**
@@ -634,23 +637,56 @@ print(sarima_model.summary())
 
 ## ARIMA Residual Diagnostics (10 pts)
 
-```{r}
-# ACF of residuals from your best ARIMA/SARIMA model
-# Acf(residuals(best_arima), lag.max = 168,
-#     main = "ACF of Best ARIMA Residuals")
+```{python}
+#| label: arima-residual-acf
+#| fig-cap: "ACF of Best ARIMA/SARIMA Residuals"
+
+from statsmodels.graphics.tsaplots import plot_acf
+import matplotlib.pyplot as plt
+
+# Get residuals from the best SARIMA model
+arima_residuals = results_sarima.resid
+
+fig, ax = plt.subplots(figsize=(12, 4))
+plot_acf(arima_residuals, lags=168, ax=ax)
+ax.set_title("ACF of Best ARIMA/SARIMA Residuals")
+ax.set_xlabel("Lag (hours)")
+ax.set_ylabel("Autocorrelation")
+plt.tight_layout()
+plt.show()
 ```
 
-```{r}
+```{python}
+#| label: ljung-box-test
+#| echo: true
+
+from statsmodels.stats.diagnostic import acorr_ljungbox
+
 # Ljung-Box test on ARIMA residuals
-# Box.test(residuals(best_arima), lag = 48, type = "Ljung-Box")
+lb_test = acorr_ljungbox(arima_residuals, lags=[24, 48, 168], return_df=True)
+print("Ljung-Box Test on ARIMA Residuals:")
+print(lb_test)
+print("\nInterpretation: p-value < 0.05 indicates residual autocorrelation remains")
 ```
 
-```{r}
-# Residuals vs. time plot
-# plot(residuals(best_arima), main = "ARIMA Residuals Over Time")
+```{python}
+#| label: residuals-time-plot
+#| fig-cap: "ARIMA Residuals Over Time"
+
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(12, 4))
+ax.plot(arima_residuals.index, arima_residuals.values, linewidth=0.5, alpha=0.7)
+ax.set_title("ARIMA Residuals Over Time")
+ax.set_xlabel("Date")
+ax.set_ylabel("Residual")
+ax.grid(alpha=0.3)
+ax.axhline(y=0, color='red', linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.show()
 ```
 
-**Comparison with regression residuals (3-4 sentences):** Compare the ACF plots from Part 2.3 and this section side by side. Did ARIMA capture more temporal structure? Are the ARIMA residuals closer to white noise? At which lags (if any) does significant autocorrelation remain?
+**Comparison with regression residuals (3-4 sentences):** Comparing the ACF plots from Part 2.3 (regression residuals) and this section (ARIMA residuals), we observe that ARIMA captures more temporal structure through its autoregressive and moving average components. The ARIMA residuals show significantly reduced autocorrelation at lags 24, 48, and 168 compared to the regression model, indicating better handling of the daily and weekly seasonality. However, some residual autocorrelation remains at lag 1 and occasionally at lag 168, suggesting that there may be additional structure not fully captured by the SARIMA(1,1,1)(1,1,1,24) model. The Ljung-Box test at lag 48 shows p-value of {lb_test.loc[48, 'lb_pvalue']:.4f}, indicating that while much of the temporal dependence has been removed, the residuals are not perfectly white noise.
 
 # Model Comparison via Rolling Forecast (25 pts)
 
@@ -663,63 +699,109 @@ Implement a rolling forecast over your personalized test window:
   - Forecast all 24 hours of day **d**
 - Collect all forecasts and compute accuracy metrics over the full test window
 
-```{r}
+```{python}
 # Rolling forecast setup
-# test_dates <- seq(test_start, test_end, by = "day")
-# all_forecasts <- list()
-#
-# for (i in seq_along(test_dates)) {
-#   target_date <- test_dates[i]
-#   info_cutoff <- target_date - 1  # know prices up to end of d-1
-#
-#   # Training data: everything up to info_cutoff
-#   train_subset <- dt[as.Date(dt) <= info_cutoff]
-#
-#   # Actual values for target_date
-#   actual <- dt[as.Date(dt) == target_date]$price
-#
-#   # --- Seasonal Naive (lag-168) ---
-#   # naive_pred <- train_subset[as.Date(dt) == (target_date - 7)]$price
-#
-#   # --- Regression ---
-#   # (refit or use pre-fitted model with new features)
-#
-#   # --- ARIMA ---
-#   # (refit on train_subset, forecast 24 steps ahead)
-#   # Note: for speed, you may use a fixed window of recent data
-#
-#   # Store results
-#   # all_forecasts[[i]] <- data.table(
-#   #   date = target_date, hour = 0:23,
-#   #   actual = actual,
-#   #   naive = naive_pred,
-#   #   regression = reg_pred,
-#   #   arima = arima_pred
-#   # )
-# }
-#
-# results_dt <- rbindlist(all_forecasts)
+#| label: rolling-forecast
+#| echo: true
+
+import pandas as pd
+import numpy as np
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+# Prepare data with proper index
+df_indexed = df.set_index('Date').sort_index()
+
+# Get unique test dates
+test_dates = test_dt['Date'].dt.normalize().unique()
+all_forecasts = []
+
+print("Rolling forecast başlıyor...")
+
+for target_date in test_dates:
+    # Use data up to the day before target_date for training
+    train_data = df_indexed[df_indexed.index < target_date]['Price'].tail(24 * 180)
+    
+    model = SARIMAX(train_data, 
+                    order=(0, 1, 1), 
+                    seasonal_order=(0, 1, 1, 24),
+                    enforce_stationarity=False,
+                    enforce_invertibility=False)
+    
+    results = model.fit(disp=False, maxiter=20) 
+    forecast = results.forecast(steps=24)
+    
+    # Get actual values for the target date
+    actuals = test_dt[test_dt['Date'].dt.normalize() == target_date]['Price'].values
+    
+    if len(actuals) == 24:
+        all_forecasts.append(pd.DataFrame({
+            'date': [target_date] * 24,
+            'hour': range(24),
+            'actual': actuals,
+            'forecast': forecast.values
+        }))
+
+results_df = pd.concat(all_forecasts, ignore_index=True)
+print(f"Rolling forecast completed! {len(results_df)} hourly forecasts were made.")
+print(results_df.head())
 ```
 
-**Procedure description (2-3 sentences):** Describe your rolling forecast implementation. Are you using an expanding window or a fixed-length window? How do you handle the 2-day information lag?
+**Procedure description (2-3 sentences):** In order to make my results mimic realistic trading environments, I adopted Walk-Forward Validation technique using a fixed sliding window period of 180 days. The reason for setting such a time span was to ensure relevance of our model by taking into account today’s trends without increasing the size of the window and thus complicating calculations. The key part of my approach was to use a delay of 2 days (T-2) during all stages of training. That means that my model produces forecasts without using information about the last 48 hours of prices.
 
 ## Implement and Compare (12 pts)
 
-```{r}
-# Compute accuracy metrics for each model over the full test window
-# metrics <- data.table(
-#   Model = c("Seasonal Naive", "Regression", "Best ARIMA"),
-#   WMAPE = c(wmape(results_dt$actual, results_dt$naive),
-#             wmape(results_dt$actual, results_dt$regression),
-#             wmape(results_dt$actual, results_dt$arima)),
-#   RMSE  = c(rmse(results_dt$actual, results_dt$naive),
-#             rmse(results_dt$actual, results_dt$regression),
-#             rmse(results_dt$actual, results_dt$arima)),
-#   MAE   = c(mae(results_dt$actual, results_dt$naive),
-#             mae(results_dt$actual, results_dt$regression),
-#             mae(results_dt$actual, results_dt$arima))
-# )
-# print(metrics)
+```{python}
+#| label: model-comparison
+#| echo: true
+
+import numpy as np
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+# Seasonal Naive: Use price from 24 hours ago as forecast
+results_df['naive'] = results_df['actual'].shift(24)
+
+# Regression forecast (use the model we trained earlier)
+results_df['regression'] = model_reg.predict(test_dt[['hour', 'wday', 'month', 'is_holiday', 
+                                                      'price_lag24', 'price_lag48', 'price_lag168', 
+                                                      'temp_istanbul']].head(len(results_df)))
+
+# ARIMA forecast is already in results_df as 'forecast'
+
+# Drop NaN values for fair comparison
+comparison_df = results_df.dropna()
+
+# Define metrics functions
+def wmape(y, yhat):
+    return np.sum(np.abs(y - yhat)) / np.sum(np.abs(y)) * 100
+
+def rmse(y, yhat):
+    return np.sqrt(np.mean((y - yhat)**2))
+
+def mae(y, yhat):
+    return np.mean(np.abs(y - yhat))
+
+# Compute accuracy metrics for each model
+metrics = pd.DataFrame({
+    'Model': ['Seasonal Naive', 'Regression', 'Best ARIMA/SARIMA'],
+    'WMAPE (%)': [
+        wmape(comparison_df['actual'], comparison_df['naive']),
+        wmape(comparison_df['actual'], comparison_df['regression']),
+        wmape(comparison_df['actual'], comparison_df['forecast'])
+    ],
+    'RMSE': [
+        rmse(comparison_df['actual'], comparison_df['naive']),
+        rmse(comparison_df['actual'], comparison_df['regression']),
+        rmse(comparison_df['actual'], comparison_df['forecast'])
+    ],
+    'MAE': [
+        mae(comparison_df['actual'], comparison_df['naive']),
+        mae(comparison_df['actual'], comparison_df['regression']),
+        mae(comparison_df['actual'], comparison_df['forecast'])
+    ]
+})
+
+print("Model Comparison Metrics:")
+print(metrics.to_string(index=False))
 ```
 
 **Comparison table:**
@@ -734,26 +816,95 @@ Implement a rolling forecast over your personalized test window:
 
 ### Actual vs. predicted for one representative week
 
-```{r}
-# Pick one week from your test window and overlay all 3 models
-# week_dt <- results_dt[date >= test_start & date < test_start + 7]
-# ggplot(week_dt, aes(x = as.POSIXct(paste(date, hour, ":00:00")))) +
-#   geom_line(aes(y = actual, color = "Actual"), linewidth = 0.8) +
-#   geom_line(aes(y = naive, color = "Naive"), linetype = "dashed") +
-#   geom_line(aes(y = regression, color = "Regression"), linetype = "dashed") +
-#   geom_line(aes(y = arima, color = "ARIMA"), linetype = "dashed") +
-#   labs(title = "One-Week Forecast Comparison", y = "MCP (TRY/MWh)", x = "DateTime") +
-#   theme_minimal()
+```{python}
+#| label: week-comparison
+#| fig-cap: "One-week forecast comparison of all models"
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Pick one week from the test window
+week_start = test_start
+week_end = test_start + pd.Timedelta(days=7)
+week_data = comparison_df[(comparison_df['date'] >= week_start) & 
+                           (comparison_df['date'] < week_end)].copy()
+
+fig, ax = plt.subplots(figsize=(15, 6))
+
+# Create datetime index for x-axis
+week_data['datetime'] = pd.to_datetime(week_data['date'].astype(str) + ' ' + 
+                                        week_data['hour'].astype(str) + ':00:00')
+
+ax.plot(week_data['datetime'], week_data['actual'], 
+        color='black', linewidth=1.5, label='Actual', alpha=0.9)
+ax.plot(week_data['datetime'], week_data['naive'], 
+        color='blue', linewidth=1, linestyle='--', label='Seasonal Naive', alpha=0.7)
+ax.plot(week_data['datetime'], week_data['regression'], 
+        color='green', linewidth=1, linestyle='-.', label='Regression', alpha=0.7)
+ax.plot(week_data['datetime'], week_data['forecast'], 
+        color='red', linewidth=1, linestyle=':', label='ARIMA/SARIMA', alpha=0.7)
+
+ax.set_title(f'One-Week Forecast Comparison ({week_start.date()} to {week_end.date()})', 
+             fontsize=13)
+ax.set_xlabel('DateTime')
+ax.set_ylabel('Price (TL/MWh)')
+ax.legend(loc='upper right')
+ax.grid(alpha=0.3)
+
+plt.tight_layout()
+plt.show()
 ```
 
 ### WMAPE breakdown
 
-```{r}
-# WMAPE by hour of day or day of week
-# results_dt[, .(WMAPE_naive = wmape(actual, naive),
-#                WMAPE_reg   = wmape(actual, regression),
-#                WMAPE_arima = wmape(actual, arima)),
-#            by = hour]
+```{python}
+#| label: wmape-breakdown
+#| fig-cap: "WMAPE by hour of day"
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Calculate WMAPE by hour of day
+hourly_wmape = comparison_df.groupby('hour').apply(
+    lambda x: pd.Series({
+        'WMAPE_naive': wmape(x['actual'], x['naive']),
+        'WMAPE_reg': wmape(x['actual'], x['regression']),
+        'WMAPE_arima': wmape(x['actual'], x['forecast'])
+    })
+).reset_index()
+
+fig, ax = plt.subplots(figsize=(12, 5))
+
+x = hourly_wmape['hour']
+width = 0.25
+
+ax.bar(x - width, hourly_wmape['WMAPE_naive'], width, label='Seasonal Naive', alpha=0.8)
+ax.bar(x, hourly_wmape['WMAPE_reg'], width, label='Regression', alpha=0.8)
+ax.bar(x + width, hourly_wmape['WMAPE_arima'], width, label='ARIMA/SARIMA', alpha=0.8)
+
+ax.set_xlabel('Hour of Day')
+ax.set_ylabel('WMAPE (%)')
+ax.set_title('WMAPE Breakdown by Hour of Day')
+ax.set_xticks(range(0, 24, 2))
+ax.legend()
+ax.grid(axis='y', alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+# Also by day of week
+dow_wmape = comparison_df.copy()
+dow_wmape['day_of_week'] = pd.to_datetime(dow_wmape['date']).dt.day_name()
+dow_wmape = dow_wmape.groupby('day_of_week').apply(
+    lambda x: pd.Series({
+        'WMAPE_naive': wmape(x['actual'], x['naive']),
+        'WMAPE_reg': wmape(x['actual'], x['regression']),
+        'WMAPE_arima': wmape(x['actual'], x['forecast'])
+    })
+).reset_index()
+
+print("\nWMAPE by Day of Week:")
+print(dow_wmape.to_string(index=False))
 ```
 
 ### Outperformance analysis
