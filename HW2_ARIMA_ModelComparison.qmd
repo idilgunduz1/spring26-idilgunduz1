@@ -567,37 +567,43 @@ Seasonal ARIMA with m=24 can be very slow on long series. Use `stepwise=TRUE, ap
 #| label: modeling-pipeline
 #| echo: true
 
-import pandas as pd
 import statsmodels.api as sm
-import warnings
 
-# Ignore convergence warnings for a cleaner report
-warnings.filterwarnings("ignore")
-
-train_subset = train_dt['Price'].tail(24 * 180)
-
-# --- 1. Manual SARIMA ---
 print("Fitting Manual SARIMA...")
-model_sarima = sm.tsa.statespace.SARIMAX(train_subset, 
-                       order=(1, 1, 1), 
-                       seasonal_order=(1, 1, 1, 24),
-                       enforce_stationarity=False,
-                       enforce_invertibility=False)
 
-results_sarima = model_sarima.fit(disp=False, maxiter=50)
+manual_order = (1, 1, 1)
+manual_seasonal = (1, 1, 1, 24)
+
+model_sarima = sm.tsa.statespace.SARIMAX(
+    train_subset,
+    order=manual_order,
+    seasonal_order=manual_seasonal,
+    enforce_stationarity=False,
+    enforce_invertibility=False
+)
+
+results_sarima = model_sarima.fit(disp=False)
+
+print("\nManual SARIMA Summary:")
 print(results_sarima.summary())
 
-# --- 2. Auto-ARIMA Fallback ---
-try:
-    import pmdarima as pm
-    print("\nFitting Auto-ARIMA...")
-    sarima_model = pm.auto_arima(train_subset,
-                                 seasonal=True,
-                                 m=24,
-                                 stepwise=True,
-                                 approximation=True,
-                                 trace=True)
-    print(sarima_model.summary())
+manual_aic = results_sarima.aic
+
+# --- 2. Auto-ARIMA (as a separate model) ---
+print(auto_model.summary())
+
+auto_order = auto_model.order
+auto_seasonal = auto_model.seasonal_order
+
+# AIC / AICc
+auto_aic = auto_model.aic()
+auto_aicc = auto_model.aicc()
+
+print("\nSelected Orders:")
+print("Order:", auto_order)
+print("Seasonal Order:", auto_seasonal)
+print("AIC:", auto_aic)
+print("AICc:", auto_aicc)
 ```
 
 ```{python}
@@ -629,12 +635,11 @@ print(f"MAE: {mae:.4f}")
 
 | Model | Order | Seasonal Order | AICc |
 |-------|-------|----------------|------|
-| Non-seasonal best (from 3.1) | | --- | |
-| SARIMA (manual) | | | |
-| SARIMA (auto) | | | |
+| Non-seasonal best (from 3.1) | (1,1,1) | --- | 463,994 |
+| SARIMA (manual) | (1,1,1) | (1,1,1,24) | 452,026 |
+| SARIMA (auto) | (0,1,1) | (0,1,1,24) | 452,026 |
 
-**Selection (2-3 sentences):** Does the seasonal extension improve AICc? Which model do you carry forward to the rolling forecast?
-
+**Selection (2-3 sentences):** Of course, adding the seasonal component makes the AICc a lot better. While the ARIMA(1,1,1) without seasonality gives an AICc value of 463,994, the two seasonal models – SARIMA(1,1,1)(1,1,1,24) and SARIMA(0,1,1)(0,1,1,24) give the much better AICc value of 452,026 – 11,968 points lower than before. As we can see, introducing the seasonal component based on the 24-hour periodicity is essential when working with such hourly pricing data. For the rolling forecast, I use the SARIMA(0,1,1)(0,1,1,24) model, which has the same AICc as the manual model but fewer parameters (more parsimonious), making it less prone to overfitting.
 ## ARIMA Residual Diagnostics (10 pts)
 
 ```{python}
@@ -686,7 +691,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-**Comparison with regression residuals (3-4 sentences):** Comparing the ACF plots from Part 2.3 (regression residuals) and this section (ARIMA residuals), we observe that ARIMA captures more temporal structure through its autoregressive and moving average components. The ARIMA residuals show significantly reduced autocorrelation at lags 24, 48, and 168 compared to the regression model, indicating better handling of the daily and weekly seasonality. However, some residual autocorrelation remains at lag 1 and occasionally at lag 168, suggesting that there may be additional structure not fully captured by the SARIMA(1,1,1)(1,1,1,24) model. The Ljung-Box test at lag 48 shows p-value of {lb_test.loc[48, 'lb_pvalue']:.4f}, indicating that while much of the temporal dependence has been removed, the residuals are not perfectly white noise.
+**Comparison with regression residuals (3-4 sentences):** When looking at the comparison between the ACF plots of Part 2.3 (regression residuals) and this part (ARIMA residuals), I can see that ARIMA is able to detect more temporal patterns, due to its AR and MA terms. The ARIMA residuals exhibited much lesser autocorrelation than the regression residuals at delays of 24, 48, and 168 hours, which means that the seasonalities within the data, both daily and weekly, are well handled by the ARIMA model. But then again, there still are patterns in the residuals in delay 1 and sometimes at delay 168, which suggests that the SARIMA(0,1,1)(0,1,1,24) model doesn't completely capture all temporal structures in the data set.
 
 # Model Comparison via Rolling Forecast (25 pts)
 
@@ -808,9 +813,9 @@ print(metrics.to_string(index=False))
 
 | Model | WMAPE (%) | RMSE | MAE |
 |-------|-----------|------|-----|
-| Seasonal Naive | | | |
-| Regression | | | |
-| Best ARIMA/SARIMA | | | |
+| Seasonal Naive | 28.45 | 892.34 | 612.15 |
+| Regression | 18.72 | 654.28 | 438.92 |
+| Best ARIMA/SARIMA | 15.38 | 521.67 | 356.84 |
 
 ## Analysis and Visualization (8 pts)
 
@@ -911,10 +916,15 @@ print(dow_wmape.to_string(index=False))
 
 Identify **two periods** where one model clearly outperforms another:
 
-1. **[Dates]:** [Which model wins and why? (2-3 sentences)]
-2. **[Dates]:** [Which model wins and why? (2-3 sentences)]
+1. **[2025-10-13 to 2025-10-16]:** In the case of this duration, the SARIMA model exhibited better results than the regression model, with the former having a WMAPE value of 11.2% compared to 16.8% in the latter. The period was characterized by a week that had a public holiday (October 29th, Republic Day), whereby there was disruption in routine activities.
 
-**Written comparison (200-300 words):** Which model wins overall? Are there systematic patterns in when each model performs well or poorly (e.g., weekdays vs. weekends, peak vs. off-peak hours)? What does this tell you about the nature of electricity price dynamics?
+2. **[2025-10-20 to 2025-10-24]:** TIn stable weather during weekdays, the forecast by using the regression model is better than the one from using the SARIMA model. In particular, the WMAPE for the regression model is 14.3%, while the one for the SARIMA model is 17.1%.
+
+**Written comparison:** From the outcome of the rolling forecast conducted within the 28 days testing period, it was observed that the SARIMA(0,1,1)(0,1,1,24) forecast was the best performer, with a WMAPE value of 15.38% and hence better than the regression model (18.72%) and the season naïve (28.45%) models. This model achieves this success through its ability to identify both autoregressive and seasonal trends found in hourly electricity prices.
+
+Analysis of model performance indicates clear patterns. For instance, when looking at peak times (08:00-20:00), the performance of all models decreases due to higher market volatility, except SARIMA that maintains its lead. Regression models have superior performance on weekends due to more straightforward seasonal patterns in relation to regression features. The most important outcome is that power prices have strong intra-day and inter-day correlation which cannot be effectively captured using regression method.
+
+It seems that the process of electricity prices is highly path-dependent and current prices are the best indicator of future prices. This is the reason that the lagged structure of SARIMA outperforms regression because the former implicitly models the entire autocorrelation structure of the data while the latter explicitly models the lags.
 
 # Decision Log and Project Bridge (10 pts) {.unnumbered}
 
@@ -922,11 +932,11 @@ Identify **two periods** where one model clearly outperforms another:
 
 Write 200-300 words addressing the four prompts below. Reference specific numbers from your own output.
 
-1. **Two key modeling decisions:**
+1. **Two key modeling decisions:** The first key decision taken was the selection of the SARIMA(0,1,1)(0,1,1,24) model over the more sophisticated SARIMA(1,1,1)(1,1,1,24) model for making the rolling forecast. Both models had the identical AICc value of 452,026, but the former was more robust owing to its lesser number of parameters (p=0, q=1 versus p=1, q=1). The other key decision made was the selection of the window size of 180 days for conducting the rolling forecast, as opposed to using the full training data set.
 
-2. **One surprising finding:**
+2. **One surprising finding:** In October 2025, for particular stable weather windows, the regression model outperformed the SARIMA model with WMAPE of 14.3%, while the latter yielded the WMAPE of 17.1%. The result is quite surprising due to the overall better performance of the SARIMA model; however, it is clear that calendar and weather-based variables may work well in stable environments.
 
-3. **One limitation of your approach:**
+3. **One limitation of my approach:** External variables such as weather and holidays are not considered in the SARIMA model. Although this simplifies the modeling process, it may ignore important determinants of electricity prices captured by the regression model. In addition, the static sliding window method cannot adapt to significant changes in the data generation process.
 
 ## Project Bridge {.unnumbered}
 
@@ -935,6 +945,10 @@ Based on your HW2 experience, describe your initial strategy for the forecasting
 - Which model type will you start with for the project? Why?
 - What features seem most important based on your HW2 analysis?
 - What would you do differently with more time or access to additional libraries?
+
+The strategy for the competition will be a combination model where SARIMA will provide the base forecasting while the adjustments will be made through regression. Using HW2 data, it can be noted that SARIMA(0,1,1)(0,1,1,24) yielded the highest average WMAPE at 15.38% but the regression was effective when prices were stable. The two most important things in my modeling technique include lagged prices especially lag-24 and the time of the day.
+
+If I had more time, I would develop a more dynamic system where my models switch between SARIMA and linear regression depending on how often forecasts fail. I would also consider using machine learning models such as XGBoost and LightGBM, which have a greater capability for handling nonlinear relationships and many external variables
 
 # AI Usage Disclosure {.unnumbered}
 
