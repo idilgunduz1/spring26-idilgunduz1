@@ -568,6 +568,11 @@ Seasonal ARIMA with m=24 can be very slow on long series. Use `stepwise=TRUE, ap
 #| echo: true
 
 import statsmodels.api as sm
+import warnings
+warnings.filterwarnings("ignore")
+
+# Use a subset of training data for faster fitting (last 180 days)
+train_subset = train_dt['Price'].tail(24 * 180)
 
 print("Fitting Manual SARIMA...")
 
@@ -582,28 +587,13 @@ model_sarima = sm.tsa.statespace.SARIMAX(
     enforce_invertibility=False
 )
 
-results_sarima = model_sarima.fit(disp=False)
+results_sarima = model_sarima.fit(disp=False, maxiter=50)
 
 print("\nManual SARIMA Summary:")
 print(results_sarima.summary())
 
 manual_aic = results_sarima.aic
-
-# --- 2. Auto-ARIMA (as a separate model) ---
-print(auto_model.summary())
-
-auto_order = auto_model.order
-auto_seasonal = auto_model.seasonal_order
-
-# AIC / AICc
-auto_aic = auto_model.aic()
-auto_aicc = auto_model.aicc()
-
-print("\nSelected Orders:")
-print("Order:", auto_order)
-print("Seasonal Order:", auto_seasonal)
-print("AIC:", auto_aic)
-print("AICc:", auto_aicc)
+print(f"\nManual SARIMA AIC: {manual_aic:.2f}")
 ```
 
 ```{python}
@@ -761,6 +751,24 @@ print(results_df.head())
 
 import numpy as np
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+# Ensure test_dt has all required features for regression prediction
+test_dt = test_dt.copy()
+test_dt['hour']  = test_dt['Date'].dt.hour
+test_dt['wday']  = test_dt['Date'].dt.weekday
+test_dt['month'] = test_dt['Date'].dt.month
+test_dt['price_lag24']  = test_dt['Price'].shift(24)
+test_dt['price_lag48']  = test_dt['Price'].shift(48)
+test_dt['price_lag168'] = test_dt['Price'].shift(168)
+
+holidays = ['2025-01-01', '2025-04-23', '2025-05-01', '2025-05-19', '2025-07-15', '2025-08-30', '2025-10-29']
+test_dt['is_holiday'] = test_dt['Date'].dt.strftime('%Y-%m-%d').isin(holidays).astype(int)
+
+# Add temp_istanbul to test_dt (from weather data)
+weather_df = pd.read_csv('data/weather_istanbul.csv', parse_dates=['date'])
+weather_df = weather_df.rename(columns={'date': 'Date', 'temperature_2m': 'temp_istanbul'})
+test_dt = test_dt.merge(weather_df[['Date', 'temp_istanbul']], on='Date', how='left')
+test_dt['temp_istanbul'] = test_dt['temp_istanbul'].interpolate(method='linear')
 
 # Seasonal Naive: Use price from 24 hours ago as forecast
 results_df['naive'] = results_df['actual'].shift(24)
@@ -960,7 +968,7 @@ This section is **required**. Missing or empty disclosure will result in a penal
 
 **AI tools used:** ChatGPT, GitHub Copilot, Claude
 
-**How they were used:** I used AI to troubleshoot and optimize. I also used the model to establish performance metrics for simulation modeling in Simio and to fix syntax and rendering issues in Quarto (.qmd) reports.
+**How they were used:** I used AI too debug my code. I also used AI to establish performance metrics for simulation modeling in Simio and to fix syntax and rendering issues in Quarto (.qmd) reports.
 
 **Confirmation:** I understand the code and concepts in this submission and can explain them independently.
 
