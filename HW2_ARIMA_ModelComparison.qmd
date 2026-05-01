@@ -968,7 +968,7 @@ This section is **required**. Missing or empty disclosure will result in a penal
 
 **AI tools used:** ChatGPT, GitHub Copilot, Claude
 
-**How they were used:** I used AI too debug my code. I also used AI to establish performance metrics for simulation modeling in Simio and to fix syntax and rendering issues in Quarto (.qmd) reports.
+**How they were used:** I used AI to debug my code. I also used AI to establish performance metrics for simulation modeling in Simio and to fix syntax and rendering issues in Quarto (.qmd) reports.
 
 **Confirmation:** I understand the code and concepts in this submission and can explain them independently.
 
